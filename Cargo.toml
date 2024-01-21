@@ -16,3 +16,8 @@ derive_builder = { path = "builder" }
 derive_debug = { path = "debug" }
 seq = { path = "seq" }
 sorted = { path = "sorted" }
+
+[workspace.dependencies]
+syn = { version = "2.0.48", features = ["full"] }
+quote = "1.0.35"
+proc-macro2 = "1.0.78"
