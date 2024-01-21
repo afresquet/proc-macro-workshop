@@ -10,6 +10,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let builder_fields = fields(&input.data).map(builder_field);
     let initial_builder_fields = fields(&input.data).map(initial_builder_field);
+    let builder_methods = fields(&input.data).map(builder_method);
 
     quote! {
         impl #name {
@@ -22,6 +23,10 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
         pub struct #builder {
             #(#builder_fields),*
+        }
+
+        impl #builder {
+            #(#builder_methods)*
         }
     }
     .into()
@@ -48,6 +53,19 @@ fn builder_field(field: &Field) -> TokenStream {
 fn initial_builder_field(field: &Field) -> TokenStream {
     if let Some(name) = &field.ident {
         return quote! { #name: None };
+    }
+    unimplemented!();
+}
+
+fn builder_method(field: &Field) -> TokenStream {
+    let ty = &field.ty;
+    if let Some(name) = &field.ident {
+        return quote! {
+            fn #name(&mut self, #name: #ty) -> &mut Self {
+                self.#name = Some(#name);
+                self
+            }
+        };
     }
     unimplemented!();
 }
