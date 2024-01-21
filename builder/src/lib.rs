@@ -1,9 +1,53 @@
-use proc_macro::TokenStream;
-use syn::{parse_macro_input, DeriveInput};
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+use syn::{parse_macro_input, Data, DeriveInput, Field};
 
 #[proc_macro_derive(Builder)]
-pub fn derive(input: TokenStream) -> TokenStream {
-    let _input = parse_macro_input!(input as DeriveInput);
+pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let builder = format_ident!("{name}Builder");
 
-    quote::quote! {}.into()
+    let builder_fields = fields(&input.data).map(builder_field);
+    let initial_builder_fields = fields(&input.data).map(initial_builder_field);
+
+    quote! {
+        impl #name {
+            pub fn builder() -> #builder {
+                #builder {
+                    #(#initial_builder_fields,)*
+                }
+            }
+        }
+
+        pub struct #builder {
+            #(#builder_fields),*
+        }
+    }
+    .into()
+}
+
+fn fields(data: &Data) -> impl Iterator<Item = &Field> {
+    match data {
+        Data::Struct(data) => match &data.fields {
+            syn::Fields::Named(fields) => fields.named.iter(),
+            _ => unimplemented!(),
+        },
+        _ => unimplemented!(),
+    }
+}
+
+fn builder_field(field: &Field) -> TokenStream {
+    let ty = &field.ty;
+    if let Some(name) = &field.ident {
+        return quote! { #name: Option<#ty> };
+    }
+    unimplemented!();
+}
+
+fn initial_builder_field(field: &Field) -> TokenStream {
+    if let Some(name) = &field.ident {
+        return quote! { #name: None };
+    }
+    unimplemented!();
 }
