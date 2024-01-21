@@ -1,6 +1,9 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, Data, DeriveInput, Field, LitStr};
+use syn::{
+    parse_macro_input, AngleBracketedGenericArguments, Data, DeriveInput, Field, GenericArgument,
+    LitStr, PathArguments,
+};
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -49,40 +52,80 @@ fn fields(data: &Data) -> impl Iterator<Item = &Field> {
     }
 }
 
-fn builder_field(field: &Field) -> TokenStream {
-    let ty = &field.ty;
-    if let Some(name) = &field.ident {
-        return quote! { #name: Option<#ty> };
+enum Wrapper {
+    Option,
+}
+
+impl std::fmt::Display for Wrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let string = match self {
+            Wrapper::Option => "Option",
+        };
+        write!(f, "{string}")
     }
-    unimplemented!();
+}
+
+fn unwrap_t(wrapper: Wrapper, field: &Field) -> Option<&syn::Type> {
+    let syn::Type::Path(ty) = &field.ty else {
+        return None;
+    };
+    let Some(segment) = ty.path.segments.first() else {
+        return None;
+    };
+    if segment.ident != wrapper.to_string() {
+        return None;
+    };
+    let PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }) =
+        &segment.arguments
+    else {
+        return None;
+    };
+    if let Some(GenericArgument::Type(ty)) = args.first() {
+        Some(ty)
+    } else {
+        None
+    }
+}
+
+fn builder_field(field: &Field) -> TokenStream {
+    let Some(name) = &field.ident else {
+        unimplemented!();
+    };
+    let ty = unwrap_t(Wrapper::Option, field).unwrap_or(&field.ty);
+    quote! { #name: Option<#ty> }
 }
 
 fn initial_builder_field(field: &Field) -> TokenStream {
-    if let Some(name) = &field.ident {
-        return quote! { #name: None };
-    }
-    unimplemented!();
+    let Some(name) = &field.ident else {
+        unimplemented!();
+    };
+    quote! { #name: None }
 }
 
 fn builder_method(field: &Field) -> TokenStream {
-    let ty = &field.ty;
-    if let Some(name) = &field.ident {
-        return quote! {
-            fn #name(&mut self, #name: #ty) -> &mut Self {
-                self.#name = Some(#name);
-                self
-            }
-        };
+    let Some(name) = &field.ident else {
+        unimplemented!();
+    };
+    let ty = unwrap_t(Wrapper::Option, field).unwrap_or(&field.ty);
+    quote! {
+        fn #name(&mut self, #name: #ty) -> &mut Self {
+            self.#name = Some(#name);
+            self
+        }
     }
-    unimplemented!();
 }
 
 fn build_attribute(field: &Field) -> TokenStream {
-    if let Some(name) = &field.ident {
-        let err_msg = LitStr::new(&format!("missing field '{}'", name), name.span());
+    let Some(name) = &field.ident else {
+        unimplemented!();
+    };
+    if unwrap_t(Wrapper::Option, field).is_some() {
         return quote! {
-            #name: self.#name.clone().ok_or(#err_msg)?
+            #name: self.#name.clone()
         };
     }
-    unimplemented!();
+    let err_msg = LitStr::new(&format!("missing field '{}'", name), name.span());
+    quote! {
+        #name: self.#name.clone().ok_or(#err_msg)?
+    }
 }
