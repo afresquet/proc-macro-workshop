@@ -12,7 +12,20 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let fields_debug = fields(&input.data).map(field_debug);
 
-    let generics = add_trait_bounds(input.generics, &input.data);
+    let bound = match input
+        .attrs
+        .iter()
+        .map(outer_debug_attr)
+        .collect::<syn::Result<Vec<_>>>()
+    {
+        Ok(predicates) => predicates.into_iter().fold(None, |a, b| a.or(b)),
+        Err(err) => {
+            let err = err.to_compile_error();
+            return quote! {#err}.into();
+        }
+    };
+
+    let generics = add_trait_bounds(input.generics, &input.data, bound.as_ref());
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     quote! {
@@ -45,6 +58,43 @@ fn debug_attr(field: &Field) -> Option<LitStr> {
     }
 }
 
+struct DebugBound {
+    generic: Option<syn::Ident>,
+    predicate: syn::WherePredicate,
+}
+
+fn outer_debug_attr(attr: &syn::Attribute) -> syn::Result<Option<DebugBound>> {
+    if !attr.path().is_ident("debug") {
+        return Ok(None);
+    }
+    let mut bound = None;
+    attr.parse_nested_meta(|meta| {
+        if !meta.path.is_ident("bound") {
+            return Ok(());
+        }
+        let value = meta.value()?;
+        let lit = value.parse::<LitStr>()?;
+        let predicate = syn::parse_str::<syn::WherePredicate>(&lit.value())?;
+        let generic = match &predicate {
+            syn::WherePredicate::Type(p_ty) => match &p_ty.bounded_ty {
+                syn::Type::Path(syn::TypePath { path, .. }) => {
+                    if path.segments.len() > 1 {
+                        let segment = path.segments.first().unwrap();
+                        Some(segment.ident.clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        bound = Some(DebugBound { generic, predicate });
+        Ok(())
+    })?;
+    Ok(bound)
+}
+
 fn fields(data: &Data) -> impl Iterator<Item = &Field> {
     match data {
         Data::Struct(data) => match &data.fields {
@@ -66,18 +116,23 @@ fn field_debug(field: &Field) -> TokenStream {
     }
 }
 
-fn add_trait_bounds(mut generics: Generics, data: &Data) -> Generics {
+fn add_trait_bounds(mut generics: Generics, data: &Data, bound: Option<&DebugBound>) -> Generics {
     generics.make_where_clause();
     if let Some(where_clause) = generics.where_clause.as_mut() {
+        if let Some(DebugBound { predicate, .. }) = bound {
+            where_clause.predicates.push(predicate.clone());
+        }
         for param in &mut generics.params {
             if let GenericParam::Type(type_param) = param {
                 let phantom_data = fields(data).any(is_phantom_data_ty(&type_param.ident));
                 let associated_types = fields(data)
                     .filter_map(get_associated_ty(&type_param.ident))
                     .collect::<Vec<_>>();
-                if !phantom_data && associated_types.is_empty() {
+                let bound_attr = bound
+                    .is_some_and(|db| db.generic.as_ref().is_some_and(|g| *g == type_param.ident));
+                if !phantom_data && associated_types.is_empty() && !bound_attr {
                     type_param.bounds.push(parse_quote!(std::fmt::Debug));
-                } else if !associated_types.is_empty() {
+                } else {
                     associated_types.iter().for_each(|ty| {
                         where_clause
                             .predicates
