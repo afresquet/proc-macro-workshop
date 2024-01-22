@@ -67,10 +67,23 @@ fn field_debug(field: &Field) -> TokenStream {
 }
 
 fn add_trait_bounds(mut generics: Generics, data: &Data) -> Generics {
-    for param in &mut generics.params {
-        if let GenericParam::Type(type_param) = param {
-            if !fields(data).any(is_phantom_data_ty(&type_param.ident)) {
-                type_param.bounds.push(parse_quote!(std::fmt::Debug));
+    generics.make_where_clause();
+    if let Some(where_clause) = generics.where_clause.as_mut() {
+        for param in &mut generics.params {
+            if let GenericParam::Type(type_param) = param {
+                let phantom_data = fields(data).any(is_phantom_data_ty(&type_param.ident));
+                let associated_types = fields(data)
+                    .filter_map(get_associated_ty(&type_param.ident))
+                    .collect::<Vec<_>>();
+                if !phantom_data && associated_types.is_empty() {
+                    type_param.bounds.push(parse_quote!(std::fmt::Debug));
+                } else if !associated_types.is_empty() {
+                    associated_types.iter().for_each(|ty| {
+                        where_clause
+                            .predicates
+                            .push(parse_quote!(#ty: std::fmt::Debug));
+                    });
+                }
             }
         }
     }
@@ -83,6 +96,33 @@ fn is_phantom_data_ty<'a>(generic_ty: &'a Ident) -> impl Fn(&'a Field) -> bool {
             return ty.path.get_ident().is_some_and(|ty| ty == generic_ty);
         }
         false
+    }
+}
+
+fn get_associated_ty<'a>(generic_ty: &'a Ident) -> impl Fn(&'a Field) -> Option<&'a syn::Type> {
+    move |field| {
+        let syn::Type::Path(ty) = &field.ty else {
+            return None;
+        };
+        let segment = ty.path.segments.first()?;
+        let syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+            args, ..
+        }) = &segment.arguments
+        else {
+            return None;
+        };
+        let syn::GenericArgument::Type(ty) = args.first()? else {
+            return None;
+        };
+        let syn::Type::Path(syn::TypePath { path, .. }) = ty else {
+            return None;
+        };
+        let segment = path.segments.first()?;
+        if segment.ident == *generic_ty && path.segments.len() > 1 {
+            Some(ty)
+        } else {
+            None
+        }
     }
 }
 
