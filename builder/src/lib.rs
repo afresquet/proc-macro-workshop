@@ -11,6 +11,16 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let name = &input.ident;
     let builder = format_ident!("{name}Builder");
 
+    let bad_attrs = fields(&input.data)
+        .filter_map(has_bad_attribute)
+        .collect::<Vec<_>>();
+    if !bad_attrs.is_empty() {
+        return quote! {
+            #(#bad_attrs)*
+        }
+        .into();
+    }
+
     let builder_fields = fields(&input.data).map(builder_field);
     let initial_builder_fields = fields(&input.data).map(initial_builder_field);
     let builder_methods = fields(&input.data).filter_map(builder_method);
@@ -91,11 +101,25 @@ fn unwrap_t(wrapper: Wrapper, field: &Field) -> Option<&syn::Type> {
     }
 }
 
-fn get_builder_attr_value(field: &Field) -> Option<LitStr> {
-    unwrap_t(Wrapper::Vec, field)?;
-    let attr = field.attrs.first()?;
+fn has_bad_attribute(field: &Field) -> Option<TokenStream> {
+    get_builder_attr_value_detail(field)
+        .err()
+        .map(syn::Error::into_compile_error)
+}
+
+fn get_builder_attr_each(field: &Field) -> Option<LitStr> {
+    get_builder_attr_value_detail(field).ok().flatten()
+}
+
+fn get_builder_attr_value_detail(field: &Field) -> syn::Result<Option<LitStr>> {
+    if unwrap_t(Wrapper::Vec, field).is_none() {
+        return Ok(None);
+    }
+    let Some(attr) = field.attrs.first() else {
+        return Ok(None);
+    };
     if !attr.path().is_ident("builder") {
-        return None;
+        return Ok(None);
     }
     let mut value = None;
     attr.parse_nested_meta(|meta| {
@@ -104,11 +128,10 @@ fn get_builder_attr_value(field: &Field) -> Option<LitStr> {
             value = Some(v.parse::<LitStr>()?);
             Ok(())
         } else {
-            Err(meta.error("unsupported attribute"))
+            Err(meta.error("expected `builder(each = \"...\")`"))
         }
-    })
-    .unwrap();
-    value
+    })?;
+    Ok(value)
 }
 
 fn builder_field(field: &Field) -> TokenStream {
@@ -136,7 +159,7 @@ fn initial_builder_field(field: &Field) -> TokenStream {
 
 fn builder_method(field: &Field) -> Option<TokenStream> {
     let name = field.ident.as_ref()?;
-    if let Some(lit) = get_builder_attr_value(field) {
+    if let Ok(Some(lit)) = get_builder_attr_value_detail(field) {
         if *name == lit.value() {
             return None;
         }
@@ -162,7 +185,7 @@ fn builder_method(field: &Field) -> Option<TokenStream> {
 fn builder_method_each(field: &Field) -> Option<TokenStream> {
     let name = field.ident.as_ref()?;
     let ty = unwrap_t(Wrapper::Vec, field)?;
-    let lit = get_builder_attr_value(field)?;
+    let lit = get_builder_attr_each(field)?;
     let item_name = Ident::new(&lit.value(), lit.span());
     Some(quote! {
         fn #item_name(&mut self, #item_name: #ty) -> &mut Self {
