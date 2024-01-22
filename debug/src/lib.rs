@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Field, LitStr};
 
-#[proc_macro_derive(CustomDebug)]
+#[proc_macro_derive(CustomDebug, attributes(debug))]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -22,6 +22,24 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     .into()
 }
 
+fn debug_attr(field: &Field) -> Option<LitStr> {
+    let attr = field.attrs.first()?;
+    if !attr.path().is_ident("debug") {
+        return None;
+    }
+    let syn::Meta::NameValue(meta) = &attr.meta else {
+        return None;
+    };
+    let syn::Expr::Lit(expr) = &meta.value else {
+        return None;
+    };
+    if let syn::Lit::Str(lit_str) = &expr.lit {
+        Some(lit_str.clone())
+    } else {
+        None
+    }
+}
+
 fn fields(data: &Data) -> impl Iterator<Item = &Field> {
     match data {
         Data::Struct(data) => match &data.fields {
@@ -37,6 +55,8 @@ fn field_debug(field: &Field) -> TokenStream {
         unimplemented!();
     };
     let lit_name = LitStr::new(&name.to_string(), name.span());
-
-    quote! { .field(#lit_name, &self.name) }
+    match debug_attr(field) {
+        Some(debug) => quote! { .field(#lit_name, &format_args!(#debug, &self.#name)) },
+        None => quote! { .field(#lit_name, &self.name) },
+    }
 }
