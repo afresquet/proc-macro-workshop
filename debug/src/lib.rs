@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, parse_quote, Data, DeriveInput, Field, GenericParam, Generics, LitStr,
+    parse_macro_input, parse_quote, Data, DeriveInput, Field, GenericParam, Generics, Ident, LitStr,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -12,7 +12,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let fields_debug = fields(&input.data).map(field_debug);
 
-    let generics = add_trait_bounds(input.generics);
+    let generics = add_trait_bounds(input.generics, &input.data);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     quote! {
@@ -66,11 +66,55 @@ fn field_debug(field: &Field) -> TokenStream {
     }
 }
 
-fn add_trait_bounds(mut generics: Generics) -> Generics {
+fn add_trait_bounds(mut generics: Generics, data: &Data) -> Generics {
     for param in &mut generics.params {
         if let GenericParam::Type(type_param) = param {
-            type_param.bounds.push(parse_quote!(std::fmt::Debug));
+            if !fields(data).any(is_phantom_data_ty(&type_param.ident)) {
+                type_param.bounds.push(parse_quote!(std::fmt::Debug));
+            }
         }
     }
     generics
+}
+
+fn is_phantom_data_ty<'a>(generic_ty: &'a Ident) -> impl Fn(&'a Field) -> bool {
+    move |field| {
+        if let Some(syn::Type::Path(ty)) = unwrap_t(Wrapper::PhantomData, field) {
+            return ty.path.get_ident().is_some_and(|ty| ty == generic_ty);
+        }
+        false
+    }
+}
+
+enum Wrapper {
+    PhantomData,
+}
+
+impl std::fmt::Display for Wrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let string = match self {
+            Self::PhantomData => "PhantomData",
+        };
+        write!(f, "{string}")
+    }
+}
+
+fn unwrap_t(wrapper: Wrapper, field: &Field) -> Option<&syn::Type> {
+    let syn::Type::Path(ty) = &field.ty else {
+        return None;
+    };
+    let segment = ty.path.segments.last()?;
+    if segment.ident != wrapper.to_string() {
+        return None;
+    };
+    let syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments { args, .. }) =
+        &segment.arguments
+    else {
+        return None;
+    };
+    if let Some(syn::GenericArgument::Type(ty)) = args.first() {
+        Some(ty)
+    } else {
+        None
+    }
 }
