@@ -44,7 +44,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             #(#builder_methods)*
             #(#builder_methods_each)*
 
-            pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
+            pub fn build(&mut self) -> std::result::Result<#name, std::boxed::Box<dyn std::error::Error>> {
                 Ok(#name {
                     #(#build_attributes,)*
                 })
@@ -142,7 +142,7 @@ fn builder_field(field: &Field) -> TokenStream {
     if unwrap_t(Wrapper::Vec, field).is_some() {
         quote! { #name: #ty }
     } else {
-        quote! { #name: Option<#ty> }
+        quote! { #name: std::option::Option<#ty> }
     }
 }
 
@@ -151,9 +151,9 @@ fn initial_builder_field(field: &Field) -> TokenStream {
         unimplemented!();
     };
     if unwrap_t(Wrapper::Vec, field).is_some() {
-        quote! { #name: Vec::new() }
+        quote! { #name: std::vec::Vec::new() }
     } else {
-        quote! { #name: None }
+        quote! { #name: std::option::Option::None }
     }
 }
 
@@ -175,7 +175,7 @@ fn builder_method(field: &Field) -> Option<TokenStream> {
     } else {
         Some(quote! {
             fn #name(&mut self, #name: #ty) -> &mut Self {
-                self.#name = Some(#name);
+                self.#name = std::option::Option::Some(#name);
                 self
             }
         })
