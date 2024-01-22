@@ -21,11 +21,11 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         .into();
     }
 
-    let builder_fields = fields(&input.data).map(builder_field);
+    let builder_struct_fields = fields(&input.data).map(builder_struct_field);
     let initial_builder_fields = fields(&input.data).map(initial_builder_field);
     let builder_methods = fields(&input.data).filter_map(builder_method);
     let builder_methods_each = fields(&input.data).filter_map(builder_method_each);
-    let build_attributes = fields(&input.data).map(build_attribute);
+    let build_fields = fields(&input.data).map(build_field);
 
     quote! {
         impl #name {
@@ -37,7 +37,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
 
         pub struct #builder {
-            #(#builder_fields),*
+            #(#builder_struct_fields),*
         }
 
         impl #builder {
@@ -46,7 +46,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
             pub fn build(&mut self) -> std::result::Result<#name, std::boxed::Box<dyn std::error::Error>> {
                 Ok(#name {
-                    #(#build_attributes,)*
+                    #(#build_fields,)*
                 })
             }
         }
@@ -83,7 +83,7 @@ fn unwrap_t(wrapper: Wrapper, field: &Field) -> Option<&syn::Type> {
     let syn::Type::Path(ty) = &field.ty else {
         return None;
     };
-    let Some(segment) = ty.path.segments.first() else {
+    let Some(segment) = ty.path.segments.last() else {
         return None;
     };
     if segment.ident != wrapper.to_string() {
@@ -134,7 +134,7 @@ fn get_builder_attr_value_detail(field: &Field) -> syn::Result<Option<LitStr>> {
     Ok(value)
 }
 
-fn builder_field(field: &Field) -> TokenStream {
+fn builder_struct_field(field: &Field) -> TokenStream {
     let Some(name) = &field.ident else {
         unimplemented!();
     };
@@ -195,7 +195,7 @@ fn builder_method_each(field: &Field) -> Option<TokenStream> {
     })
 }
 
-fn build_attribute(field: &Field) -> TokenStream {
+fn build_field(field: &Field) -> TokenStream {
     let Some(name) = &field.ident else {
         unimplemented!();
     };
