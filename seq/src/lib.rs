@@ -1,5 +1,7 @@
+use std::ops::Range;
+
 use itertools::{Itertools, MultiPeek};
-use proc_macro2::{Group, Ident, Literal, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Literal, TokenStream, TokenTree};
 use syn::parse_macro_input;
 
 #[derive(Debug)]
@@ -38,11 +40,15 @@ pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         content,
     } = parse_macro_input!(input as Sequence);
 
-    (start..end)
-        .map(Literal::usize_unsuffixed)
-        .map(|substitution| substitute_target(content.clone(), &ident, &substitution))
-        .collect::<TokenStream>()
-        .into()
+    let nums = (start..end).map(Literal::usize_unsuffixed);
+
+    if has_repeat_section(content.clone()) {
+        repeat_section(content.clone(), &ident, start..end).into()
+    } else {
+        nums.map(|substitution| substitute_target(content.clone(), &ident, &substitution))
+            .collect::<TokenStream>()
+            .into()
+    }
 }
 
 fn substitute_target(
@@ -68,6 +74,30 @@ fn substitute_target(
     }
 
     TokenStream::from_iter(output)
+}
+
+fn repeat_section(content: TokenStream, target: &syn::Ident, range: Range<usize>) -> TokenStream {
+    content
+        .into_iter()
+        .map(|tt| match tt {
+            TokenTree::Group(group) if is_repeat_section(group.clone()) => Group::new(
+                group.delimiter(),
+                range
+                    .clone()
+                    .map(Literal::usize_unsuffixed)
+                    .map(|substitution| {
+                        let mut stream = group.stream().into_iter();
+                        let Some(TokenTree::Group(content)) = stream.nth(1) else {
+                            unreachable!()
+                        };
+                        substitute_target(content.stream(), target, &substitution)
+                    })
+                    .collect(),
+            )
+            .into(),
+            _ => tt,
+        })
+        .collect()
 }
 
 fn parse_ident(
@@ -111,5 +141,31 @@ fn parse_ident(
         }
         (ident, _, _) if ident == target => Some(substitution.clone().into()),
         (_, _, _) => None,
+    }
+}
+
+fn has_repeat_section(content: TokenStream) -> bool {
+    content.into_iter().any(|tt| {
+        if let TokenTree::Group(group) = tt {
+            is_repeat_section(group)
+        } else {
+            false
+        }
+    })
+}
+
+fn is_repeat_section(group: Group) -> bool {
+    let mut iter = group.stream().into_iter();
+    match (iter.next(), iter.next(), iter.next()) {
+        (
+            Some(TokenTree::Punct(left)),
+            Some(TokenTree::Group(group)),
+            Some(TokenTree::Punct(right)),
+        ) => {
+            left.as_char() == '#'
+                && group.delimiter() == Delimiter::Parenthesis
+                && right.as_char() == '*'
+        }
+        _ => false,
     }
 }
