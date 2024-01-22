@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use itertools::{Itertools, MultiPeek};
 use proc_macro2::{Delimiter, Group, Ident, Literal, TokenStream, TokenTree};
 use syn::parse_macro_input;
@@ -7,9 +5,23 @@ use syn::parse_macro_input;
 #[derive(Debug)]
 struct Sequence {
     ident: syn::Ident,
-    start: usize,
-    end: usize,
+    range: Range<usize>,
     content: TokenStream,
+}
+
+#[derive(Debug)]
+enum Range<T> {
+    Exclusive(std::ops::Range<T>),
+    Inclusive(std::ops::RangeInclusive<T>),
+}
+
+impl Range<usize> {
+    pub fn to_literal(self) -> Vec<Literal> {
+        match self {
+            Range::Exclusive(range) => range.map(Literal::usize_unsuffixed).collect(),
+            Range::Inclusive(range) => range.map(Literal::usize_unsuffixed).collect(),
+        }
+    }
 }
 
 impl syn::parse::Parse for Sequence {
@@ -18,14 +30,25 @@ impl syn::parse::Parse for Sequence {
         let _ = input.parse::<syn::Token![in]>()?; // Discard
         let start = input.parse::<syn::LitInt>()?.base10_parse()?;
         let _ = input.parse::<syn::Token![..]>()?; // Discard
+        let inclusive = match input.peek(syn::Token![=]) {
+            true => {
+                let _ = input.parse::<syn::Token![=]>()?; // Discard
+                true
+            }
+            false => false,
+        };
         let end = input.parse::<syn::LitInt>()?.base10_parse()?;
+        let range = if inclusive {
+            Range::Inclusive(start..=end)
+        } else {
+            Range::Exclusive(start..end)
+        };
         let content;
         let _ = syn::braced!(content in input); // Discard
         let content = content.parse()?;
         Ok(Sequence {
             ident,
-            start,
-            end,
+            range,
             content,
         })
     }
@@ -35,17 +58,19 @@ impl syn::parse::Parse for Sequence {
 pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let Sequence {
         ident,
-        start,
-        end,
+        range,
         content,
     } = parse_macro_input!(input as Sequence);
 
-    let nums = (start..end).map(Literal::usize_unsuffixed);
+    let literals = range.to_literal();
 
     if has_repeat_section(content.clone()) {
-        repeat_section(content.clone(), &ident, start..end).into()
+        repeat_section(content.clone(), &ident, literals.clone()).into()
     } else {
-        nums.map(|substitution| substitute_target(content.clone(), &ident, &substitution))
+        literals
+            .clone()
+            .into_iter()
+            .map(|substitution| substitute_target(content.clone(), &ident, &substitution))
             .collect::<TokenStream>()
             .into()
     }
@@ -76,15 +101,19 @@ fn substitute_target(
     TokenStream::from_iter(output)
 }
 
-fn repeat_section(content: TokenStream, target: &syn::Ident, range: Range<usize>) -> TokenStream {
+fn repeat_section(
+    content: TokenStream,
+    target: &syn::Ident,
+    literals: Vec<Literal>,
+) -> TokenStream {
     content
         .into_iter()
         .map(|tt| match tt {
             TokenTree::Group(group) if is_repeat_section(group.clone()) => Group::new(
                 group.delimiter(),
-                range
+                literals
                     .clone()
-                    .map(Literal::usize_unsuffixed)
+                    .into_iter()
                     .map(|substitution| {
                         let mut stream = group.stream().into_iter();
                         let Some(TokenTree::Group(content)) = stream.nth(1) else {
