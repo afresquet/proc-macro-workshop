@@ -9,17 +9,26 @@ pub fn sorted(
     let ast = input.clone();
     let ast = parse_macro_input!(ast as syn::Item);
 
-    let syn::Item::Enum(item_enum) = ast else {
-        return syn::Error::new(Span::call_site(), "expected enum or match expression")
-            .to_compile_error()
-            .into();
-    };
-
-    if let Err(error) = check_sorted(&item_enum) {
-        return error.into();
+    if let Err(error) = check_errors(ast) {
+        let input: TokenStream = input.into();
+        return quote::quote! {
+            #error
+            #input
+        }
+        .into();
     }
 
     input
+}
+
+fn check_errors(ast: syn::Item) -> Result<(), TokenStream> {
+    let syn::Item::Enum(item_enum) = ast else {
+        let error = syn::Error::new(Span::call_site(), "expected enum or match expression")
+            .to_compile_error();
+        return Err(error);
+    };
+    check_sorted(&item_enum)?;
+    Ok(())
 }
 
 fn check_sorted(item_enum: &syn::ItemEnum) -> Result<(), TokenStream> {
