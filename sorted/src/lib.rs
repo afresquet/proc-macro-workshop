@@ -1,5 +1,5 @@
 use proc_macro2::{Span, TokenStream};
-use syn::parse_macro_input;
+use syn::{parse_macro_input, visit_mut::VisitMut};
 
 #[proc_macro_attribute]
 pub fn sorted(
@@ -21,13 +21,45 @@ pub fn sorted(
     input
 }
 
+struct SortedVisitor;
+
+impl VisitMut for SortedVisitor {
+    fn visit_expr_match_mut(&mut self, node: &mut syn::ExprMatch) {
+        if let Some(attr) = node.attrs.first_mut() {
+            if let syn::Meta::Path(path) = &attr.meta {
+                if path.is_ident("sorted") {
+                    eprintln!("{node:#?}");
+                }
+            }
+        }
+
+        syn::visit_mut::visit_expr_match_mut(self, node);
+    }
+}
+
+#[proc_macro_attribute]
+pub fn check(
+    _: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let ast = input.clone();
+    let mut ast = parse_macro_input!(ast as syn::ItemFn);
+
+    SortedVisitor.visit_item_fn_mut(&mut ast);
+
+    input
+}
+
 fn check_errors(ast: syn::Item) -> Result<(), TokenStream> {
-    let syn::Item::Enum(item_enum) = ast else {
-        let error = syn::Error::new(Span::call_site(), "expected enum or match expression")
-            .to_compile_error();
-        return Err(error);
-    };
-    check_sorted(&item_enum)?;
+    match ast {
+        syn::Item::Enum(item_enum) => check_sorted(&item_enum)?,
+        _ => {
+            return Err(
+                syn::Error::new(Span::call_site(), "expected enum or match expression")
+                    .to_compile_error(),
+            );
+        }
+    }
     Ok(())
 }
 

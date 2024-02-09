@@ -18,6 +18,6 @@ seq = { path = "seq" }
 sorted = { path = "sorted" }
 
 [workspace.dependencies]
-syn = { version = "2.0.48", features = ["full"] }
+syn = { version = "2.0.48", features = ["full", "visit-mut", "extra-traits", "parsing"] }
 quote = "1.0.35"
 proc-macro2 = "1.0.78"

@@ -5,23 +5,8 @@ use syn::parse_macro_input;
 #[derive(Debug)]
 struct Sequence {
     ident: syn::Ident,
-    range: Range<usize>,
+    range: SequenceRange,
     content: TokenStream,
-}
-
-#[derive(Debug)]
-enum Range<T> {
-    Exclusive(std::ops::Range<T>),
-    Inclusive(std::ops::RangeInclusive<T>),
-}
-
-impl Range<usize> {
-    pub fn to_literal(self) -> Vec<Literal> {
-        match self {
-            Range::Exclusive(range) => range.map(Literal::usize_unsuffixed).collect(),
-            Range::Inclusive(range) => range.map(Literal::usize_unsuffixed).collect(),
-        }
-    }
 }
 
 impl syn::parse::Parse for Sequence {
@@ -30,19 +15,12 @@ impl syn::parse::Parse for Sequence {
         let _ = input.parse::<syn::Token![in]>()?; // Discard
         let start = input.parse::<syn::LitInt>()?.base10_parse()?;
         let _ = input.parse::<syn::Token![..]>()?; // Discard
-        let inclusive = match input.peek(syn::Token![=]) {
-            true => {
-                let _ = input.parse::<syn::Token![=]>()?; // Discard
-                true
-            }
-            false => false,
-        };
+        let inclusive = input.peek(syn::Token![=]);
+        if inclusive {
+            let _ = input.parse::<syn::Token![=]>()?; // Discard
+        }
         let end = input.parse::<syn::LitInt>()?.base10_parse()?;
-        let range = if inclusive {
-            Range::Inclusive(start..=end)
-        } else {
-            Range::Exclusive(start..end)
-        };
+        let range = SequenceRange::new(start, end, inclusive);
         let content;
         let _ = syn::braced!(content in input); // Discard
         let content = content.parse()?;
@@ -54,6 +32,34 @@ impl syn::parse::Parse for Sequence {
     }
 }
 
+#[derive(Clone, Debug)]
+enum SequenceRange {
+    Exclusive(std::ops::Range<usize>),
+    Inclusive(std::ops::RangeInclusive<usize>),
+}
+
+impl SequenceRange {
+    pub fn new(start: usize, end: usize, inclusive: bool) -> Self {
+        if inclusive {
+            Self::Inclusive(start..=end)
+        } else {
+            Self::Exclusive(start..end)
+        }
+    }
+}
+
+impl Iterator for SequenceRange {
+    type Item = Literal;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = match self {
+            SequenceRange::Exclusive(range) => range.next(),
+            SequenceRange::Inclusive(range) => range.next(),
+        };
+        next.map(Literal::usize_unsuffixed)
+    }
+}
+
 #[proc_macro]
 pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let Sequence {
@@ -62,14 +68,10 @@ pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         content,
     } = parse_macro_input!(input as Sequence);
 
-    let literals = range.to_literal();
-
     if has_repeat_section(content.clone()) {
-        repeat_section(content.clone(), &ident, literals.clone()).into()
+        repeat_section(content.clone(), &ident, range).into()
     } else {
-        literals
-            .clone()
-            .into_iter()
+        range
             .map(|substitution| substitute_target(content.clone(), &ident, &substitution))
             .collect::<TokenStream>()
             .into()
@@ -104,7 +106,7 @@ fn substitute_target(
 fn repeat_section(
     content: TokenStream,
     target: &syn::Ident,
-    literals: Vec<Literal>,
+    literals: SequenceRange,
 ) -> TokenStream {
     content
         .into_iter()
@@ -113,7 +115,6 @@ fn repeat_section(
                 group.delimiter(),
                 literals
                     .clone()
-                    .into_iter()
                     .map(|substitution| {
                         let mut stream = group.stream().into_iter();
                         let Some(TokenTree::Group(content)) = stream.nth(1) else {
